@@ -1,104 +1,101 @@
 #include <windows.h>
-#include <iostream>
-#include <conio.h>
+#include <shellapi.h>
 
-// --- Configuration Constants ---
-const int SUPER_FAST_SPEED = 31; // Fastest possible repeat rate
-const int SUPER_FAST_DELAY = 0;  // Shortest possible delay (Windows minimum)
+#pragma comment(lib, "user32.lib")
+#pragma comment(lib, "shell32.lib")
+#pragma comment(lib, "advapi32.lib")
 
-const int STANDARD_DEFAULT_SPEED = 22; // Mid-high speed, a safe baseline
-const int STANDARD_DEFAULT_DELAY = 1;  // Mid-range delay
+#define WM_TRAYICON (WM_USER + 1)
+#define ID_TRAY_EXIT 1001
+#define ID_TRAY_STANDARD 1002
+#define ID_TRAY_SUPER 1003
+#define ID_TRAY_INSANE 1004
 
-// Global variables to store the true original system settings
-DWORD g_originalSpeed;
-int g_originalDelay;
+const int DEFAULT_SPEED = 20;
+const int DEFAULT_DELAY = 1;
+const int SUPER_SPEED = 31;
+const int INSANE_REPEAT = 10;
+const int INSANE_DELAY = 150;
 
-// Function to set the keyboard speed and delay
-void setKeyboardSettings(int speed, int delay) {
+void disableFilterKeys() {
+    FILTERKEYS fk = { sizeof(FILTERKEYS), 0 };
+    SystemParametersInfo(SPI_SETFILTERKEYS, sizeof(FILTERKEYS), &fk, SPIF_SENDCHANGE | SPIF_UPDATEINIFILE);
+}
+
+void setStandard(int speed, int delay) {
+    disableFilterKeys();
     SystemParametersInfo(SPI_SETKEYBOARDSPEED, speed, 0, SPIF_SENDCHANGE | SPIF_UPDATEINIFILE);
     SystemParametersInfo(SPI_SETKEYBOARDDELAY, delay, 0, SPIF_SENDCHANGE | SPIF_UPDATEINIFILE);
 }
 
-// Exit Handler (Now CLOSES but DOES NOT RESTORE settings, giving you full manual control)
-BOOL WINAPI ExitHandler(DWORD fdwCtrlType) {
-    if (fdwCtrlType == CTRL_CLOSE_EVENT || fdwCtrlType == CTRL_C_EVENT) {
-        std::cout << "\n\n[WARNING]: Closing. Settings NOT restored. Current speed remains active.\n";
-        return FALSE; // Allow system to terminate
-    }
-    return FALSE;
+void setInsane() {
+    FILTERKEYS fk = { 0 };
+    fk.cbSize = sizeof(FILTERKEYS);
+    fk.dwFlags = FKF_FILTERKEYSON | FKF_AVAILABLE;
+    fk.iWaitMSec = 0;
+    fk.iDelayMSec = INSANE_DELAY;
+    fk.iRepeatMSec = INSANE_REPEAT;
+    fk.iBounceMSec = 0;
+    SystemParametersInfo(SPI_SETFILTERKEYS, sizeof(FILTERKEYS), &fk, SPIF_SENDCHANGE | SPIF_UPDATEINIFILE);
 }
 
-int main() {
-    // 1. Save Original Settings to Global Variables
-    SystemParametersInfo(SPI_GETKEYBOARDSPEED, 0, &g_originalSpeed, 0);
-    SystemParametersInfo(SPI_GETKEYBOARDDELAY, 0, &g_originalDelay, 0);
-
-    // 2. Register the Exit Handler (Safe closing)
-    SetConsoleCtrlHandler(ExitHandler, TRUE);
-
-    bool isFastMode = false;
-    char key = ' ';
-
-    std::cout << "========================================\n";
-    std::cout << "    KEYBOARD RATE TOGGLE UTILITY\n";
-    std::cout << "    (MANUAL RESTORE MODE)\n";
-    std::cout << "========================================\n";
-    std::cout << "Original System Settings Saved:\n";
-    std::cout << "  - Speed: " << g_originalSpeed << ", Delay: " << g_originalDelay << "\n\n";
-
-    std::cout << "CONTROLS:\n";
-    std::cout << "  [S] - Toggle SUPER FAST Mode (Speed: 31, Delay: 0)\n";
-    std::cout << "  [R] - Restore SAVED Original Settings\n";
-    std::cout << "  [D] - Set STANDARD Default (Speed: " << STANDARD_DEFAULT_SPEED << ", Delay: " << STANDARD_DEFAULT_DELAY << ")\n";
-    std::cout << "  [Q] - Quit Program (Leaves current settings active)\n";
-    std::cout << "  [X] - eXit and Restore (Resets to original settings and quits)\n\n";
-
-    while (true) {
-        if (isFastMode) {
-            std::cout << "\r[STATUS]: SUPER FAST ACTIVE  " << std::flush;
-        }
-        else {
-            std::cout << "\r[STATUS]: Normal/Default     " << std::flush;
-        }
-
-        key = _getch();
-        key = tolower(key);
-
-        switch (key) {
-        case 's':
-            std::cout << "\n[ACTION]: Setting SUPER FAST...\n";
-            setKeyboardSettings(SUPER_FAST_SPEED, SUPER_FAST_DELAY);
-            isFastMode = true;
-            break;
-
-        case 'r':
-            std::cout << "\n[ACTION]: Restoring Saved Original...\n";
-            setKeyboardSettings(g_originalSpeed, g_originalDelay);
-            isFastMode = false;
-            break;
-
-        case 'd':
-            std::cout << "\n[ACTION]: Setting STANDARD Default...\n";
-            setKeyboardSettings(STANDARD_DEFAULT_SPEED, STANDARD_DEFAULT_DELAY);
-            isFastMode = false;
-            break;
-
-        case 'q':
-            // Quit immediately, leaving current settings active
-            std::cout << "\n\nQuitting (Settings left active)...\n";
-            goto end_loop;
-
-        case 'x': // <-- New explicit restore and exit option
-            std::cout << "\n\n[ACTION]: Restoring original settings and exiting...\n";
-            setKeyboardSettings(g_originalSpeed, g_originalDelay);
-            goto end_loop;
-
-        default:
-            // Ignore other key presses
-            break;
+LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam) {
+    if (message == WM_TRAYICON) {
+        if (lParam == WM_RBUTTONUP) {
+            POINT curPoint;
+            GetCursorPos(&curPoint);
+            HMENU hMenu = CreatePopupMenu();
+            AppendMenuA(hMenu, MF_STRING, ID_TRAY_STANDARD, "Standard (20/1)");
+            AppendMenuA(hMenu, MF_STRING, ID_TRAY_SUPER, "Super Fast (31/0)");
+            AppendMenuA(hMenu, MF_STRING, ID_TRAY_INSANE, "INSANE (100Hz)");
+            AppendMenuA(hMenu, MF_SEPARATOR, 0, NULL);
+            AppendMenuA(hMenu, MF_STRING, ID_TRAY_EXIT, "Restore & Exit");
+            SetForegroundWindow(hWnd);
+            TrackPopupMenu(hMenu, TPM_BOTTOMALIGN | TPM_LEFTALIGN, curPoint.x, curPoint.y, 0, hWnd, NULL);
+            DestroyMenu(hMenu);
         }
     }
+    else if (message == WM_COMMAND) {
+        switch (LOWORD(wParam)) {
+        case ID_TRAY_STANDARD: setStandard(DEFAULT_SPEED, DEFAULT_DELAY); Beep(440, 100); break;
+        case ID_TRAY_SUPER:    setStandard(SUPER_SPEED, 0); Beep(880, 100); break;
+        case ID_TRAY_INSANE:   setInsane(); Beep(1200, 150); break;
+        case ID_TRAY_EXIT:     setStandard(DEFAULT_SPEED, DEFAULT_DELAY); PostQuitMessage(0); break;
+        }
+    }
+    return DefWindowProc(hWnd, message, wParam, lParam);
+}
 
-end_loop:
+int WINAPI WinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance, _In_ LPSTR lpCmdLine, _In_ int nCmdShow) {
+    WNDCLASSA wc = { 0 };
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = "KeyRateDockClass";
+    RegisterClassA(&wc);
+
+    HWND hWnd = CreateWindowA("KeyRateDockClass", NULL, 0, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+
+    NOTIFYICONDATAA nid = { 0 };
+    nid.cbSize = sizeof(NOTIFYICONDATAA);
+    nid.hWnd = hWnd;
+    nid.uID = 1;
+    nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+    nid.uCallbackMessage = WM_TRAYICON;
+    nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+    lstrcpyA(nid.szTip, "Keyboard Overdrive");
+    Shell_NotifyIconA(NIM_ADD, &nid);
+
+    RegisterHotKey(hWnd, 1, MOD_ALT, VK_F9);
+    RegisterHotKey(hWnd, 2, MOD_ALT, VK_F10);
+    RegisterHotKey(hWnd, 3, MOD_ALT, VK_F11);
+    RegisterHotKey(hWnd, 4, MOD_ALT, VK_F12);
+
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    Shell_NotifyIconA(NIM_DELETE, &nid);
     return 0;
 }
